@@ -17,7 +17,7 @@ class Config:
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=24)
     
     # CORS Configuration
-    CORS_ORIGINS = os.environ.get('CORS_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173').split(',')
+    CORS_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173']
 
 class DevelopmentConfig(Config):
     """Development configuration"""
