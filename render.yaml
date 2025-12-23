@@ -12,7 +12,6 @@ services:
     envVars:
       - key: FLASK_ENV
         value: production
-    plan: free
 
   # Frontend Service
   - type: web
@@ -29,4 +28,3 @@ services:
           type: web
           name: project-management-backend
           property: host
-    plan: free
