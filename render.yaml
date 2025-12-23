@@ -1,0 +1,32 @@
+services:
+  # Backend Service
+  - type: web
+    name: project-management-backend
+    env: python
+    buildCommand: |
+      cd backend
+      pip install -r requirements.txt
+    startCommand: |
+      cd backend
+      gunicorn run:app
+    envVars:
+      - key: FLASK_ENV
+        value: production
+    plan: free
+
+  # Frontend Service
+  - type: web
+    name: project-management-frontend
+    env: static
+    buildCommand: |
+      cd frontend
+      npm install
+      npm run build
+    staticPublishPath: frontend/dist
+    envVars:
+      - key: VITE_API_URL
+        fromService:
+          type: web
+          name: project-management-backend
+          property: host
+    plan: free
