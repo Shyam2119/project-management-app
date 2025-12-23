@@ -14,9 +14,8 @@ services:
         value: production
 
   # Frontend Service
-  - type: web
+  - type: static
     name: project-management-frontend
-    env: static
     buildCommand: |
       cd frontend
       npm install
