@@ -90,13 +90,19 @@ def login():
         access_token = create_access_token(identity=str(user.id))
         
         # Log login activity
-        ActivityLog.log_activity(
-            user_id=user.id,
-            activity_type=ActivityType.USER_LOGIN,
-            description=f"User {user.email} logged in",
-            request=request
-        )
-        db.session.commit()
+        try:
+            ActivityLog.log_activity(
+                user_id=user.id,
+                activity_type=ActivityType.USER_LOGIN,
+                description=f"User {user.email} logged in",
+                request=request
+            )
+            db.session.commit()
+        except Exception as log_error:
+            # In a read-only environment (like Vercel with SQLite), commits will fail.
+            # We explicitly ignore this error to allow the login to proceed.
+            print(f"Warning: Failed to answer activity log (likely read-only DB): {log_error}")
+            db.session.rollback()
         
         return success_response(
             'Login successful',
