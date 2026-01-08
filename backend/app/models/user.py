@@ -12,6 +12,7 @@ class User(db.Model, TimestampMixin):
     
     # Primary Key
     id = db.Column(db.Integer, primary_key=True)
+    company_id = db.Column(db.Integer, db.ForeignKey('companies.id'), nullable=True) # All users must belong to a company
     
     # Authentication
     email = db.Column(db.String(120), unique=True, nullable=False, index=True)

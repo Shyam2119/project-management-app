@@ -16,7 +16,7 @@ Base URL: `http://localhost:5000/api`
 ### 1. Register User
 **POST** `/auth/register`
 
-Register a new user account.
+Register a new user account. Users can optionally create a new company or join an existing one.
 
 **Request Body:**
 ```json
@@ -25,10 +25,104 @@ Register a new user account.
   "password": "SecurePass123",
   "first_name": "John",
   "last_name": "Doe",
-  "phone": "+1234567890",
-  "role": "employee",
-  "skills": ["Python", "Flask"],
-  "weekly_capacity": 40
+  "phone": "+1234567890",  // Optional
+  "company_name": "Acme Corp",  // Optional: Create new company or join existing
+  "skills": "[\"Python\", \"Flask\"]",  // Optional
+  "weekly_capacity": 40  // Optional
+}
+```
+
+**Response (201) - New Company Created:**
+```json
+{
+  "status": "success",
+  "message": "Registration successful. Your company has been created and you can now login.",
+  "data": {
+    "user": {
+      "id": 1,
+      "email": "user@example.com",
+      "first_name": "John",
+      "last_name": "Doe",
+      "role": "employee",
+      "is_active": true,
+      "is_verified": true,
+      "company_id": 1
+    },
+    "requires_approval": false,
+    "company_id": 1
+  }
+}
+```
+
+**Response (201) - Joining Existing Company:**
+```json
+{
+  "status": "success",
+  "message": "Registration successful. Your account is pending admin approval to join the company.",
+  "data": {
+    "user": {
+      "id": 2,
+      "email": "user2@example.com",
+      "first_name": "Jane",
+      "last_name": "Smith",
+      "role": "employee",
+      "is_active": false,
+      "is_verified": false,
+      "company_id": 1
+    },
+    "requires_approval": true,
+    "company_id": 1
+  }
+}
+```
+
+**Response (201) - No Company Specified:**
+```json
+{
+  "status": "success",
+  "message": "Registration successful. Your account is pending admin approval and company assignment.",
+  "data": {
+    "user": {
+      "id": 3,
+      "email": "user3@example.com",
+      "first_name": "Bob",
+      "last_name": "Johnson",
+      "role": "employee",
+      "is_active": false,
+      "is_verified": false,
+      "company_id": null
+    },
+    "requires_approval": true,
+    "company_id": null
+  }
+}
+```
+
+**Notes:**
+- If `company_name` is provided and company exists: User joins company (pending approval)
+- If `company_name` is provided and company doesn't exist: New company is created, user is auto-activated
+- If `company_name` is not provided: User account created without company (pending admin assignment)
+- Users joining existing companies require admin approval
+- Users creating new companies are automatically activated
+
+---
+
+### 1a. Register Company
+**POST** `/auth/register-company`
+
+Register a new company and create the admin user.
+
+**Request Body:**
+```json
+{
+  "company_name": "Acme Corp",
+  "email": "admin@acme.com",
+  "password": "AdminPass123",
+  "first_name": "John",
+  "last_name": "Doe",
+  "phone": "+1234567890",  // Optional
+  "company_email": "company@acme.com",  // Optional: Company-wide login email
+  "company_password": "CompanyPass123"  // Optional: Company-wide login password
 }
 ```
 
@@ -36,10 +130,22 @@ Register a new user account.
 ```json
 {
   "status": "success",
-  "message": "User registered successfully",
+  "message": "Company registration successful. You can now login.",
   "data": {
-    "user": { ... },
-    "access_token": "eyJ0eXAiOiJKV1QiLCJhbGc..."
+    "user": {
+      "id": 1,
+      "email": "admin@acme.com",
+      "first_name": "John",
+      "last_name": "Doe",
+      "role": "admin",
+      "company_id": 1
+    },
+    "company": {
+      "id": 1,
+      "name": "Acme Corp",
+      "company_email": "company@acme.com",
+      "company_login_enabled": true
+    }
   }
 }
 ```
@@ -49,27 +155,77 @@ Register a new user account.
 ### 2. Login
 **POST** `/auth/login`
 
-Login and receive JWT token.
+Login and receive JWT token. Supports both individual user login and company-wide login.
 
 **Request Body:**
 ```json
 {
   "email": "user@example.com",
-  "password": "SecurePass123"
+  "password": "SecurePass123",
+  "user_id": 123  // Optional: Required when using company login with multiple users
 }
 ```
 
-**Response (200):**
+**Response (200) - Individual Login:**
 ```json
 {
   "status": "success",
   "message": "Login successful",
   "data": {
     "user": { ... },
-    "access_token": "eyJ0eXAiOiJKV1QiLCJhbGc..."
+    "access_token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
+    "login_type": "individual"
   }
 }
 ```
+
+**Response (200) - Company Login (Multiple Users):**
+```json
+{
+  "status": "success",
+  "message": "Company login successful - select user",
+  "data": {
+    "requires_user_selection": true,
+    "users": [
+      {
+        "id": 1,
+        "email": "user1@example.com",
+        "full_name": "John Doe",
+        "role": "employee"
+      },
+      {
+        "id": 2,
+        "email": "user2@example.com",
+        "full_name": "Jane Smith",
+        "role": "teamleader"
+      }
+    ],
+    "company": {
+      "id": 1,
+      "name": "Acme Corp",
+      "company_email": "company@acme.com"
+    }
+  }
+}
+```
+
+**Response (200) - Company Login (Single User - Auto-selected):**
+```json
+{
+  "status": "success",
+  "message": "Login successful",
+  "data": {
+    "user": { ... },
+    "access_token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
+    "login_type": "company"
+  }
+}
+```
+
+**Notes:**
+- If logging in with company credentials and multiple users exist, the API returns a list of users for selection
+- If only one user exists, the login completes automatically
+- After user selection, send another login request with `user_id` parameter
 
 ---
 
@@ -134,7 +290,69 @@ Authorization: Bearer <access_token>
 
 ---
 
-### 5. Refresh Token
+### 5. Get Company Settings
+**GET** `/auth/company-settings`
+
+Get company settings (Admin only).
+
+**Headers:**
+```
+Authorization: Bearer <access_token>
+```
+
+**Response (200):**
+```json
+{
+  "status": "success",
+  "message": "Company settings retrieved",
+  "data": {
+    "id": 1,
+    "name": "Acme Corp",
+    "company_email": "company@acme.com",
+    "company_login_enabled": true,
+    "subscription_status": "active"
+  }
+}
+```
+
+---
+
+### 6. Update Company Settings
+**PUT** `/auth/company-settings`
+
+Update company settings including company-wide login credentials (Admin only).
+
+**Headers:**
+```
+Authorization: Bearer <access_token>
+```
+
+**Request Body:**
+```json
+{
+  "company_email": "company@acme.com",  // Optional
+  "company_password": "CompanyPass123",  // Optional (leave empty to keep current)
+  "company_login_enabled": true          // Optional
+}
+```
+
+**Response (200):**
+```json
+{
+  "status": "success",
+  "message": "Company settings updated",
+  "data": {
+    "id": 1,
+    "name": "Acme Corp",
+    "company_email": "company@acme.com",
+    "company_login_enabled": true
+  }
+}
+```
+
+---
+
+### 7. Refresh Token
 **POST** `/auth/refresh`
 
 Get a new JWT token.

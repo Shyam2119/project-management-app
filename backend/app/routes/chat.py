@@ -14,10 +14,23 @@ def get_conversations():
     """Get list of recent conversations (Users and Groups) with unread counts"""
     try:
         current_user_id = get_jwt_identity()
+        if not current_user_id:
+            return error_response('Invalid token', None, 401)
+        
+        try:
+            user_id_int = int(current_user_id)
+        except (ValueError, TypeError):
+            return error_response('Invalid user ID', None, 400)
+        
+        # Verify user exists
+        user = User.query.get(user_id_int)
+        if not user:
+            return error_response('User not found', None, 404)
+        
         from sqlalchemy import func
         
         # 1. Get Groups user belongs to
-        group_memberships = GroupMember.query.filter_by(user_id=current_user_id).all()
+        group_memberships = GroupMember.query.filter_by(user_id=user_id_int).all()
         group_ids = [m.group_id for m in group_memberships]
         groups = ChatGroup.query.filter(ChatGroup.id.in_(group_ids)).all()
         
@@ -40,17 +53,22 @@ def get_conversations():
             groups_data.append(g_dict)
 
         # 2. Get Users - OPTIMIZED w/ Aggregation
-        # Fetch ALL active users so nobody is hidden
-        users = User.query.filter(
-            User.id != current_user_id, 
-            User.is_active == True
-        ).all()
+        # Fetch ALL active users so nobody is hidden (scoped to same company)
+        if user.company_id:
+            users = User.query.filter(
+                User.id != user_id_int, 
+                User.is_active == True,
+                User.company_id == user.company_id
+            ).all()
+        else:
+            # If user has no company, return empty list
+            users = []
         
         # Aggregate Unread DMs in one query: SELECT sender_id, COUNT(*) FROM message ... GROUP BY sender_id
         unread_counts = db.session.query(
             Message.sender_id, func.count(Message.id)
         ).filter(
-            Message.recipient_id == current_user_id,
+            Message.recipient_id == user_id_int,
             Message.is_read == False
         ).group_by(Message.sender_id).all()
         
@@ -82,6 +100,19 @@ def get_messages():
     """
     try:
         current_user_id = get_jwt_identity()
+        if not current_user_id:
+            return error_response('Invalid token', None, 401)
+        
+        try:
+            user_id_int = int(current_user_id)
+        except (ValueError, TypeError):
+            return error_response('Invalid user ID', None, 400)
+        
+        # Verify user exists
+        user = User.query.get(user_id_int)
+        if not user:
+            return error_response('User not found', None, 404)
+        
         other_user_id = request.args.get('user_id', type=int)
         group_id = request.args.get('group_id', type=int)
         
@@ -92,7 +123,7 @@ def get_messages():
         
         if group_id:
             # Verify membership
-            member = GroupMember.query.filter_by(group_id=group_id, user_id=current_user_id).first()
+            member = GroupMember.query.filter_by(group_id=group_id, user_id=user_id_int).first()
             if not member:
                 return error_response('Not a member of this group', None, 403)
             
@@ -108,7 +139,7 @@ def get_messages():
             messages.reverse()
             
             # Filter deleted for me
-            c_uid = str(current_user_id) # Comparison needs str
+            c_uid = str(user_id_int) # Comparison needs str
             for m in messages:
                  deleted_list = m.deleted_by.split(',') if m.deleted_by else []
                  if c_uid not in deleted_list:
@@ -125,12 +156,6 @@ def get_messages():
             
         else:
             # DM: (sender=Me AND recipient=Other) OR (sender=Other AND recipient=Me)
-            # Ensure proper types
-            try:
-                c_uid = int(current_user_id)
-            except (ValueError, TypeError):
-                c_uid = current_user_id
-
             from sqlalchemy.orm import joinedload
             # Fetch latest 200 messages
             messages = Message.query.options(joinedload(Message.sender))\
@@ -138,8 +163,8 @@ def get_messages():
                 and_(
                     Message.group_id.is_(None),  # Ensure not a group message
                     or_(
-                        and_(Message.sender_id == c_uid, Message.recipient_id == other_user_id),
-                        and_(Message.sender_id == other_user_id, Message.recipient_id == c_uid)
+                        and_(Message.sender_id == user_id_int, Message.recipient_id == other_user_id),
+                        and_(Message.sender_id == other_user_id, Message.recipient_id == user_id_int)
                     )
                 )
             ).order_by(Message.created_at.desc())\
@@ -152,7 +177,7 @@ def get_messages():
             # Filter deleted for me
             for m in messages:
                  deleted_list = m.deleted_by.split(',') if m.deleted_by else []
-                 if str(c_uid) not in deleted_list:
+                 if str(user_id_int) not in deleted_list:
                      if m.is_deleted_globally:
                          m.content = "🚫 This message was deleted"
                          m.message_type = 'text'
@@ -162,7 +187,7 @@ def get_messages():
             # Update DM Read Status
             unread_updates = Message.query.filter(
                 Message.sender_id == other_user_id,
-                Message.recipient_id == current_user_id,
+                Message.recipient_id == user_id_int,
                 Message.is_read == False
             ).update({'is_read': True})
             
@@ -188,6 +213,19 @@ def send_message():
     """
     try:
         current_user_id = get_jwt_identity()
+        if not current_user_id:
+            return error_response('Invalid token', None, 401)
+        
+        try:
+            user_id_int = int(current_user_id)
+        except (ValueError, TypeError):
+            return error_response('Invalid user ID', None, 400)
+        
+        # Verify user exists
+        user = User.query.get(user_id_int)
+        if not user:
+            return error_response('User not found', None, 404)
+        
         data = request.get_json()
         
         content = data.get('content')
@@ -205,7 +243,7 @@ def send_message():
             recipient_id = None
         
         message = Message(
-            sender_id=current_user_id,
+            sender_id=user_id_int,
             content=content.strip(),
             recipient_id=recipient_id,
             group_id=group_id,
@@ -218,24 +256,23 @@ def send_message():
         
         # Check for AI Bot Interaction
         if recipient_id:
-            from app.models.user import User
             recipient = User.query.get(recipient_id)
             if recipient and recipient.is_bot:
                 # Generate AI Response
                 from app.services.ai_service import AIService
-                ai_response_content = AIService.process_message(current_user_id, content)
+                ai_response_content = AIService.process_message(user_id_int, content)
                 
                 # Send AI Reply
                 ai_message = Message(
                     sender_id=recipient_id, # The Bot
-                    recipient_id=current_user_id,
+                    recipient_id=user_id_int,
                     content=ai_response_content,
                     message_type='text',
                     is_read=False
                 )
                 db.session.add(ai_message)
                 db.session.commit()
-                
+        
         return success_response('Message sent', message.to_dict(), 201)
         
     except Exception as e:
@@ -253,6 +290,23 @@ def create_group():
     """
     try:
         current_user_id = get_jwt_identity()
+        if not current_user_id:
+            return error_response('Invalid token', None, 401)
+        
+        try:
+            user_id_int = int(current_user_id)
+        except (ValueError, TypeError):
+            return error_response('Invalid user ID', None, 400)
+        
+        # Verify user exists
+        user = User.query.get(user_id_int)
+        if not user:
+            return error_response('User not found', None, 404)
+        
+        # Check if user has a company (for scoping members)
+        if not user.company_id:
+            return error_response('User is not associated with a company', None, 403)
+        
         data = request.get_json()
         
         name = data.get('name')
@@ -262,18 +316,19 @@ def create_group():
         member_ids = data.get('member_ids', [])
         
         # Create Group
-        group = ChatGroup(name=name, created_by=current_user_id)
+        group = ChatGroup(name=name, created_by=user_id_int)
         db.session.add(group)
         db.session.flush() # Get ID
         
         # Add Creator
-        db.session.add(GroupMember(group_id=group.id, user_id=current_user_id))
+        db.session.add(GroupMember(group_id=group.id, user_id=user_id_int))
         
-        # Add Members
+        # Add Members (only from same company)
         for uid in member_ids:
-            if uid != current_user_id: # Avoid dupe
-                 # Verify user exists
-                 if User.query.get(uid):
+            if uid != user_id_int: # Avoid dupe
+                 # Verify user exists and is in same company
+                 member_user = User.query.get(uid)
+                 if member_user and member_user.company_id == user.company_id:
                      db.session.add(GroupMember(group_id=group.id, user_id=uid))
         
         db.session.commit()
@@ -292,22 +347,29 @@ def delete_message(message_id):
     """
     try:
         current_user_id = get_jwt_identity()
+        if not current_user_id:
+            return error_response('Invalid token', None, 401)
+        
+        try:
+            user_id_int = int(current_user_id)
+        except (ValueError, TypeError):
+            return error_response('Invalid user ID', None, 400)
+        
         mode = request.args.get('mode', 'me')
         
         message = Message.query.get_or_404(message_id)
         
         if mode == 'everyone':
             # Only sender can delete for everyone
-            # FIX: Ensure type-safe comparison (str vs str)
-            if str(message.sender_id) != str(current_user_id):
+            if message.sender_id != user_id_int:
                 return error_response('Only sender can delete for everyone', None, 403)
             message.is_deleted_globally = True
             
         else:
             # Delete for me: Append ID to deleted_by string
             current_deleted = message.deleted_by.split(',') if message.deleted_by else []
-            if str(current_user_id) not in current_deleted:
-                current_deleted.append(str(current_user_id))
+            if str(user_id_int) not in current_deleted:
+                current_deleted.append(str(user_id_int))
                 message.deleted_by = ','.join(current_deleted)
         
         db.session.commit()
@@ -323,6 +385,14 @@ def clear_chat():
     """Clear chat history for current user"""
     try:
         current_user_id = get_jwt_identity()
+        if not current_user_id:
+            return error_response('Invalid token', None, 401)
+        
+        try:
+            user_id_int = int(current_user_id)
+        except (ValueError, TypeError):
+            return error_response('Invalid user ID', None, 400)
+        
         data = request.get_json()
         target_user_id = data.get('user_id')
         group_id = data.get('group_id')
@@ -335,16 +405,16 @@ def clear_chat():
         else:
             messages = Message.query.filter(
                 or_(
-                    and_(Message.sender_id == current_user_id, Message.recipient_id == target_user_id),
-                    and_(Message.sender_id == target_user_id, Message.recipient_id == current_user_id)
+                    and_(Message.sender_id == user_id_int, Message.recipient_id == target_user_id),
+                    and_(Message.sender_id == target_user_id, Message.recipient_id == user_id_int)
                 )
             ).all()
             
         count = 0
         for m in messages:
             current_deleted = m.deleted_by.split(',') if m.deleted_by else []
-            if str(current_user_id) not in current_deleted:
-                current_deleted.append(str(current_user_id))
+            if str(user_id_int) not in current_deleted:
+                current_deleted.append(str(user_id_int))
                 m.deleted_by = ','.join(current_deleted)
                 count += 1
                 
@@ -361,6 +431,19 @@ def forward_message():
     """Forward a message to multiple recipients"""
     try:
         current_user_id = get_jwt_identity()
+        if not current_user_id:
+            return error_response('Invalid token', None, 401)
+        
+        try:
+            user_id_int = int(current_user_id)
+        except (ValueError, TypeError):
+            return error_response('Invalid user ID', None, 400)
+        
+        # Verify user exists
+        user = User.query.get(user_id_int)
+        if not user:
+            return error_response('User not found', None, 404)
+        
         data = request.get_json()
         
         original_msg_id = data.get('message_id')
@@ -380,22 +463,24 @@ def forward_message():
             
         forwarded_count = 0
         
-        # Forward to users
+        # Forward to users (only same company)
         for uid in recipient_ids:
-            msg = Message(
-                sender_id=current_user_id,
-                recipient_id=uid,
-                content=content,
-                attachment_url=attachment,
-                message_type=msg_type
-            )
-            db.session.add(msg)
-            forwarded_count += 1
+            recipient = User.query.get(uid)
+            if recipient and recipient.company_id == user.company_id:
+                msg = Message(
+                    sender_id=user_id_int,
+                    recipient_id=uid,
+                    content=content,
+                    attachment_url=attachment,
+                    message_type=msg_type
+                )
+                db.session.add(msg)
+                forwarded_count += 1
             
         # Forward to groups
         for gid in group_ids:
             msg = Message(
-                sender_id=current_user_id,
+                sender_id=user_id_int,
                 group_id=gid,
                 content=content,
                 attachment_url=attachment,
@@ -403,7 +488,7 @@ def forward_message():
             )
             db.session.add(msg)
             forwarded_count += 1
-            
+        
         db.session.commit()
         return success_response(f'Forwarded to {forwarded_count} chats')
         
@@ -417,6 +502,14 @@ def rename_group(group_id):
     """Rename a group"""
     try:
         current_user_id = get_jwt_identity()
+        if not current_user_id:
+            return error_response('Invalid token', None, 401)
+        
+        try:
+            user_id_int = int(current_user_id)
+        except (ValueError, TypeError):
+            return error_response('Invalid user ID', None, 400)
+        
         data = request.get_json()
         new_name = data.get('name')
         
@@ -426,7 +519,7 @@ def rename_group(group_id):
         group = ChatGroup.query.get_or_404(group_id)
         
         # Check membership
-        member = GroupMember.query.filter_by(group_id=group.id, user_id=current_user_id).first()
+        member = GroupMember.query.filter_by(group_id=group.id, user_id=user_id_int).first()
         if not member:
             return error_response('Not a member of this group', None, 403)
             
@@ -445,11 +538,18 @@ def leave_group(group_id):
     """Leave a group"""
     try:
         current_user_id = get_jwt_identity()
+        if not current_user_id:
+            return error_response('Invalid token', None, 401)
+        
+        try:
+            user_id_int = int(current_user_id)
+        except (ValueError, TypeError):
+            return error_response('Invalid user ID', None, 400)
         
         group = ChatGroup.query.get_or_404(group_id)
         
         # Check membership
-        member = GroupMember.query.filter_by(group_id=group.id, user_id=current_user_id).first()
+        member = GroupMember.query.filter_by(group_id=group.id, user_id=user_id_int).first()
         if not member:
             return error_response('Not a member of this group', None, 400)
             

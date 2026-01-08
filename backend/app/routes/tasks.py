@@ -30,7 +30,17 @@ def get_tasks():
     """
     try:
         current_user_id = get_jwt_identity()
-        current_user = User.query.get(current_user_id)
+        if not current_user_id:
+            return error_response('Invalid token', None, 401)
+        
+        # Convert to int since JWT identity is stored as string but user ID is integer
+        try:
+            current_user = User.query.get(int(current_user_id))
+        except (ValueError, TypeError):
+            return error_response('Invalid user ID', None, 400)
+        
+        if not current_user:
+            return error_response('User not found', None, 404)
         
         # Get query parameters
         page = request.args.get('page', 1, type=int)
@@ -47,7 +57,7 @@ def get_tasks():
         # Role-based filtering
         if current_user.role == UserRole.EMPLOYEE:
             # Employees only see their assigned tasks
-            query = query.join(Assignment).filter(Assignment.user_id == current_user_id)
+            query = query.join(Assignment).filter(Assignment.user_id == int(current_user_id))
         
         # Apply filters
         if project_id:
@@ -143,14 +153,9 @@ def create_task(current_user):
         
         # Validate required fields
         required_fields = ['project_id', 'title']
-        is_valid, missing_fields = validate_required_fields(data, required_fields)
-        
-        if not is_valid:
-            return error_response(
-                'Missing required fields',
-                {'missing_fields': missing_fields},
-                400
-            )
+        error = validate_required_fields(data, required_fields)
+        if error:
+            return error_response(error, None, 400)
         
         # Validate project exists
         project = Project.query.get(data['project_id'])
@@ -244,7 +249,17 @@ def update_task(task_id):
     """Update task details (Admin/Team Leader full access, Employee limited access)"""
     try:
         current_user_id = get_jwt_identity()
-        current_user = User.query.get(current_user_id)
+        if not current_user_id:
+            return error_response('Invalid token', None, 401)
+        
+        # Convert to int since JWT identity is stored as string but user ID is integer
+        try:
+            current_user = User.query.get(int(current_user_id))
+        except (ValueError, TypeError):
+            return error_response('Invalid user ID', None, 400)
+        
+        if not current_user:
+            return error_response('User not found', None, 404)
         
         task = Task.query.get(task_id)
         
@@ -262,7 +277,7 @@ def update_task(task_id):
             # Check assignment
             assignment = Assignment.query.filter_by(
                 task_id=task_id,
-                user_id=current_user_id
+                user_id=int(current_user_id)
             ).first()
             if assignment:
                 is_assigned_employee = True
@@ -313,7 +328,7 @@ def update_task(task_id):
             
             if 'actual_hours' in data:
                 # Also update the assignment actual_hours
-                assignment = Assignment.query.filter_by(task_id=task_id, user_id=current_user_id).first()
+                assignment = Assignment.query.filter_by(task_id=task_id, user_id=int(current_user_id)).first()
                 # Simplified: update task total actual hours. Ideally should update assignment too.
                 # Assuming task.actual_hours is sum of assignments.
                 # For simplicity, we allow direct update of task actual_hours or just add to it.
@@ -390,14 +405,9 @@ def assign_task(task_id, current_user):
         
         # Validate required fields
         required_fields = ['user_id', 'assigned_hours']
-        is_valid, missing_fields = validate_required_fields(data, required_fields)
-        
-        if not is_valid:
-            return error_response(
-                'Missing required fields',
-                {'missing_fields': missing_fields},
-                400
-            )
+        error = validate_required_fields(data, required_fields)
+        if error:
+            return error_response(error, None, 400)
         
         # Validate user exists
         user = User.query.get(data['user_id'])
@@ -519,7 +529,7 @@ def add_comment(task_id):
         comment = Comment(
             content=data['content'].strip(),
             task_id=task_id,
-            user_id=current_user_id,
+            user_id=int(current_user_id),
             parent_id=parent_id
         )
         
@@ -549,7 +559,7 @@ def update_comment(comment_id):
             return error_response('Comment not found', None, 404)
         
         # Only author can update
-        if comment.user_id != current_user_id:
+        if comment.user_id != int(current_user_id):
             return error_response('You can only update your own comments', None, 403)
         
         data = request.get_json()
@@ -579,14 +589,15 @@ def delete_comment(comment_id):
     """Delete comment"""
     try:
         current_user_id = get_jwt_identity()
-        current_user = User.query.get(current_user_id)
+        # Convert to int since JWT identity is stored as string but user ID is integer
+        current_user = User.query.get(int(current_user_id)) if current_user_id else None
         
         comment = Comment.query.get(comment_id)
         if not comment:
             return error_response('Comment not found', None, 404)
         
         # Only author or admin can delete
-        if comment.user_id != current_user_id and current_user.role != UserRole.ADMIN:
+        if comment.user_id != int(current_user_id) and current_user.role != UserRole.ADMIN:
             return error_response('You do not have permission to delete this comment', None, 403)
         
         db.session.delete(comment)
@@ -607,7 +618,7 @@ def get_my_tasks():
         current_user_id = get_jwt_identity()
         
         # Get all assignments for current user
-        assignments = Assignment.query.filter_by(user_id=current_user_id).all()
+        assignments = Assignment.query.filter_by(user_id=int(current_user_id)).all()
         
         tasks_data = []
         for assignment in assignments:

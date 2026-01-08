@@ -21,27 +21,64 @@ def get_overview():
     """
     try:
         current_user_id = get_jwt_identity()
-        current_user = User.query.get(current_user_id)
+        if not current_user_id:
+            return error_response('Invalid token', None, 401)
         
-        # Basic counts
-        total_users = User.query.filter_by(is_active=True, is_bot=False).count()
-        total_projects = Project.query.count()
-        total_tasks = Task.query.count()
+        # Convert to int since JWT identity is stored as string but user ID is integer
+        try:
+            current_user = User.query.get(int(current_user_id))
+        except (ValueError, TypeError):
+            return error_response('Invalid user ID', None, 400)
         
-        # Project statistics
-        active_projects = Project.query.filter_by(status=ProjectStatus.IN_PROGRESS).count()
-        completed_projects = Project.query.filter_by(status=ProjectStatus.COMPLETED).count()
+        if not current_user:
+            return error_response('User not found', None, 404)
+        
+        # Check if user has a company (for scoped queries)
+        if not current_user.company_id:
+            return error_response('User is not associated with a company', None, 403)
+        
+        # Basic counts (scoped to company)
+        total_users = User.query.filter_by(
+            is_active=True, 
+            is_bot=False,
+            company_id=current_user.company_id
+        ).count()
+        total_projects = Project.query.filter_by(company_id=current_user.company_id).count()
+        total_tasks = Task.query.join(Project).filter(
+            Project.company_id == current_user.company_id
+        ).count()
+        
+        # Project statistics (scoped to company)
+        active_projects = Project.query.filter_by(
+            status=ProjectStatus.IN_PROGRESS,
+            company_id=current_user.company_id
+        ).count()
+        completed_projects = Project.query.filter_by(
+            status=ProjectStatus.COMPLETED,
+            company_id=current_user.company_id
+        ).count()
         overdue_projects = Project.query.filter(
             and_(
+                Project.company_id == current_user.company_id,
                 Project.end_date < datetime.utcnow().date(),
                 Project.status.notin_([ProjectStatus.COMPLETED, ProjectStatus.ARCHIVED])
             )
         ).count()
         
-        # Task statistics
-        completed_tasks = Task.query.filter_by(status=TaskStatus.COMPLETED).count()
-        in_progress_tasks = Task.query.filter_by(status=TaskStatus.IN_PROGRESS).count()
-        overdue_tasks = Task.query.filter(
+        # Task statistics (scoped to company)
+        completed_tasks = Task.query.join(Project).filter(
+            and_(
+                Project.company_id == current_user.company_id,
+                Task.status == TaskStatus.COMPLETED
+            )
+        ).count()
+        in_progress_tasks = Task.query.join(Project).filter(
+            and_(
+                Project.company_id == current_user.company_id,
+                Task.status == TaskStatus.IN_PROGRESS
+            )
+        ).count()
+        overdue_tasks = Task.query.join(Project).filter(
             and_(
                 Task.due_date < datetime.utcnow().date(),
                 Task.status != TaskStatus.COMPLETED
@@ -63,9 +100,21 @@ def get_overview():
         overview = {
             'users': {
                 'total': total_users,
-                'admins': User.query.filter_by(role=UserRole.ADMIN, is_active=True).count(),
-                'managers': User.query.filter_by(role=UserRole.TEAM_LEADER, is_active=True).count(),
-                'employees': User.query.filter_by(role=UserRole.EMPLOYEE, is_active=True).count()
+                'admins': User.query.filter_by(
+                    role=UserRole.ADMIN, 
+                    is_active=True,
+                    company_id=current_user.company_id
+                ).count(),
+                'managers': User.query.filter_by(
+                    role=UserRole.TEAM_LEADER, 
+                    is_active=True,
+                    company_id=current_user.company_id
+                ).count(),
+                'employees': User.query.filter_by(
+                    role=UserRole.EMPLOYEE, 
+                    is_active=True,
+                    company_id=current_user.company_id
+                ).count()
             },
             'projects': {
                 'total': total_projects,

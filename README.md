@@ -81,7 +81,17 @@ project-management-app/
     pip install -r requirements.txt
     ```
 
-4.  **Run the application**
+4.  **Initialize the database** (First time setup or if you get schema errors)
+    ```bash
+    python init_db.py
+    ```
+    Or if you need to fix an existing database:
+    ```bash
+    python fix_database.py
+    ```
+    ⚠️ **Warning**: This will delete all existing data!
+
+5.  **Run the application**
     ```bash
     python run.py
     ```

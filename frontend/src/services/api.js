@@ -44,6 +44,8 @@ export const authAPI = {
   register: (userData) => api.post('/auth/register', userData),
   getCurrentUser: () => api.get('/auth/me'),
   changePassword: (passwords) => api.put('/auth/change-password', passwords),
+  getCompanySettings: () => api.get('/auth/company-settings'),
+  updateCompanySettings: (data) => api.put('/auth/company-settings', data),
   logout: () => {
     localStorage.removeItem('token');
     localStorage.removeItem('user');

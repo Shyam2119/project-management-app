@@ -29,7 +29,7 @@ def get_notifications():
         type_filter = request.args.get('type')
         
         # Build query
-        query = Notification.query.filter_by(user_id=current_user_id)
+        query = Notification.query.filter_by(user_id=int(current_user_id))
         
         # Apply filters
         if is_read_filter is not None:
@@ -53,7 +53,7 @@ def get_notifications():
         
         # Get unread count
         unread_count = Notification.query.filter_by(
-            user_id=current_user_id,
+            user_id=user_id_int,
             is_read=False
         ).count()
         
@@ -75,6 +75,13 @@ def mark_as_read(notification_id):
     """Mark notification as read"""
     try:
         current_user_id = get_jwt_identity()
+        if not current_user_id:
+            return error_response('Invalid token', None, 401)
+        
+        try:
+            user_id_int = int(current_user_id)
+        except (ValueError, TypeError):
+            return error_response('Invalid user ID', None, 400)
         
         notification = Notification.query.get(notification_id)
         
@@ -82,7 +89,7 @@ def mark_as_read(notification_id):
             return error_response('Notification not found', None, 404)
         
         # Check ownership
-        if notification.user_id != current_user_id:
+        if notification.user_id != user_id_int:
             return error_response('You do not have permission', None, 403)
         
         notification.is_read = True
@@ -102,9 +109,16 @@ def mark_all_as_read():
     """Mark all notifications as read"""
     try:
         current_user_id = get_jwt_identity()
+        if not current_user_id:
+            return error_response('Invalid token', None, 401)
+        
+        try:
+            user_id_int = int(current_user_id)
+        except (ValueError, TypeError):
+            return error_response('Invalid user ID', None, 400)
         
         updated_count = Notification.query.filter_by(
-            user_id=current_user_id,
+            user_id=user_id_int,
             is_read=False
         ).update({
             'is_read': True,
@@ -130,6 +144,13 @@ def delete_notification(notification_id):
     """Delete a notification"""
     try:
         current_user_id = get_jwt_identity()
+        if not current_user_id:
+            return error_response('Invalid token', None, 401)
+        
+        try:
+            user_id_int = int(current_user_id)
+        except (ValueError, TypeError):
+            return error_response('Invalid user ID', None, 400)
         
         notification = Notification.query.get(notification_id)
         
@@ -137,7 +158,7 @@ def delete_notification(notification_id):
             return error_response('Notification not found', None, 404)
         
         # Check ownership
-        if notification.user_id != current_user_id:
+        if notification.user_id != user_id_int:
             return error_response('You do not have permission', None, 403)
         
         db.session.delete(notification)
@@ -156,9 +177,16 @@ def clear_all_notifications():
     """Clear all read notifications"""
     try:
         current_user_id = get_jwt_identity()
+        if not current_user_id:
+            return error_response('Invalid token', None, 401)
+        
+        try:
+            user_id_int = int(current_user_id)
+        except (ValueError, TypeError):
+            return error_response('Invalid user ID', None, 400)
         
         deleted_count = Notification.query.filter_by(
-            user_id=current_user_id
+            user_id=user_id_int
         ).delete()
         
         db.session.commit()
@@ -180,9 +208,16 @@ def get_unread_count():
     """Get count of unread notifications"""
     try:
         current_user_id = get_jwt_identity()
+        if not current_user_id:
+            return error_response('Invalid token', None, 401)
+        
+        try:
+            user_id_int = int(current_user_id)
+        except (ValueError, TypeError):
+            return error_response('Invalid user ID', None, 400)
         
         unread_count = Notification.query.filter_by(
-            user_id=current_user_id,
+            user_id=user_id_int,
             is_read=False
         ).count()
         

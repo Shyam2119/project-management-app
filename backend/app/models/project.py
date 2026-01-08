@@ -22,6 +22,7 @@ class Project(db.Model, TimestampMixin):
     
     # Primary Key
     id = db.Column(db.Integer, primary_key=True)
+    company_id = db.Column(db.Integer, db.ForeignKey('companies.id'), nullable=True)
     
     # Basic Information
     title = db.Column(db.String(200), nullable=False)

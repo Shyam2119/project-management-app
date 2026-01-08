@@ -41,9 +41,7 @@ export default function CreateUserModal({ isOpen, onClose, onSuccess }) {
     setError('');
 
     try {
-      console.log('Submitting user creation:', formData);
       const response = await userAPI.create(formData);
-      console.log('User creation response:', response);
 
       if (response.data.status === 'success') {
         setCreatedUser(response.data.data);

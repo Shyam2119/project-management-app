@@ -50,14 +50,22 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (credentials) => {
     try {
-      console.log('Attempting login with:', credentials.email);
-
       const response = await api.post('/auth/login', credentials);
 
-      console.log('Login response:', response.data);
-
       if (response.data.status === 'success') {
-        const { access_token, user: userData } = response.data.data;
+        const data = response.data.data;
+        
+        // Check if user selection is required (company login with multiple users)
+        if (data.requires_user_selection) {
+          return {
+            success: true,
+            requiresUserSelection: true,
+            users: data.users,
+            company: data.company
+          };
+        }
+
+        const { access_token, user: userData } = data;
 
         // Store token
         localStorage.setItem('token', access_token);
@@ -65,8 +73,6 @@ export const AuthProvider = ({ children }) => {
         // Set user data
         setUser(userData);
         setIsAuthenticated(true);
-
-        console.log('Login successful, user:', userData);
 
         return { success: true, requiresPasswordSetup: false };
       } else {
@@ -101,11 +107,47 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  const loginWithUserSelection = async (credentials, selectedUserId) => {
+    try {
+      const response = await api.post('/auth/login', {
+        ...credentials,
+        user_id: selectedUserId
+      });
+
+      if (response.data.status === 'success') {
+        const { access_token, user: userData } = response.data.data;
+
+        // Store token
+        localStorage.setItem('token', access_token);
+
+        // Set user data
+        setUser(userData);
+        setIsAuthenticated(true);
+
+        return { success: true, requiresPasswordSetup: false };
+      } else {
+        return {
+          success: false,
+          error: response.data.message || 'Login failed'
+        };
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: error.response?.data?.message || 'Login failed'
+      };
+    }
+  };
+
   const register = async (userData) => {
     try {
       const response = await api.post('/auth/register', userData);
       if (response.data.status === 'success') {
-        return { success: true, message: 'Registration successful' };
+        return { 
+          success: true, 
+          message: response.data.message || 'Registration successful',
+          requires_approval: response.data.data?.requires_approval || false
+        };
       }
       return {
         success: false,
@@ -137,7 +179,25 @@ export const AuthProvider = ({ children }) => {
     isAuthenticated,
     loading,
     login,
+    loginWithUserSelection,
     register,
+    registerAdmin: async (userData) => {
+      try {
+        const response = await api.post('/auth/register-company', userData);
+        if (response.data.status === 'success') {
+          return { success: true, message: 'Company registration successful' };
+        }
+        return {
+          success: false,
+          error: response.data.message || 'Registration failed'
+        };
+      } catch (error) {
+        return {
+          success: false,
+          error: error.response?.data?.message || 'Registration failed'
+        };
+      }
+    },
     logout,
     setUser,
     updateUserVerification

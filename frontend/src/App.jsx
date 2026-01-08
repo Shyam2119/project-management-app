@@ -5,6 +5,7 @@ import { AuthProvider, useAuth } from './contexts/AuthContext';
 // Pages
 import Login from './pages/Login';
 import Register from './pages/Register';
+import AdminSignup from './pages/auth/AdminSignup';
 import Dashboard from './pages/Dashboard';
 import Projects from './pages/Projects';
 import ProjectDetail from './pages/ProjectDetail';
@@ -59,6 +60,12 @@ function AppRoutes() {
       <Route path="/login" element={
         <PublicRoute>
           <Login />
+        </PublicRoute>
+      } />
+
+      <Route path="/admin-register" element={
+        <PublicRoute>
+          <AdminSignup />
         </PublicRoute>
       } />
 
@@ -117,7 +124,7 @@ function App() {
   }, []);
 
   return (
-    <Router>
+    <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <AuthProvider>
         <AppRoutes />
       </AuthProvider>

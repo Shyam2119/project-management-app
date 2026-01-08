@@ -28,10 +28,8 @@ export default function CreateProjectModal({ isOpen, onClose, onSuccess }) {
 
   const fetchManagers = async () => {
     try {
-      console.log('Fetching managers...');
       // Fetch ALL users to allow Admin or others to be managers if needed
       const response = await userAPI.getAll();
-      console.log('Managers response:', response.data);
 
       if (response.data.status === 'success') {
         // Filter: Only Admins and Managers can manage projects (case-insensitive)
@@ -39,7 +37,6 @@ export default function CreateProjectModal({ isOpen, onClose, onSuccess }) {
           const role = (u.role || '').toLowerCase();
           return role === 'admin' || role === 'teamleader';
         });
-        console.log('Team Leaders found:', managersList);
         setManagers(managersList);
       }
     } catch (error) {

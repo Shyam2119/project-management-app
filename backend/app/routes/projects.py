@@ -11,21 +11,35 @@ from app.utils.validators import validate_required_fields
 
 projects_bp = Blueprint('projects', __name__)
 
+def get_current_user_obj():
+    """Get current user object from JWT token"""
+    try:
+        uid = get_jwt_identity()
+        if not uid:
+            return None
+        # Convert to int since JWT identity is stored as string but user ID is integer
+        try:
+            return User.query.get(int(uid))
+        except (ValueError, TypeError):
+            return None
+    except Exception:
+        return None
 
 @projects_bp.route('/', methods=['GET'])
 @jwt_required()
 def get_projects():
     """
-    Get all projects with pagination and filtering
-    Query params:
-    - page: Page number (default: 1)
-    - per_page: Items per page (default: 10)
-    - status: Filter by status
-    - priority: Filter by priority
-    - manager_id: Filter by manager
-    - search: Search by title or code
+    Get all projects with pagination and filtering (Scoped to Company)
     """
     try:
+        current_user = get_current_user_obj()
+        if not current_user:
+            return error_response('User not found', None, 404)
+        
+        # Check if user has a company
+        if not current_user.company_id:
+            return error_response('User is not associated with a company', None, 403)
+        
         # Get query parameters
         page = request.args.get('page', 1, type=int)
         per_page = request.args.get('per_page', 10, type=int)
@@ -34,8 +48,8 @@ def get_projects():
         manager_id = request.args.get('manager_id', type=int)
         search = request.args.get('search')
         
-        # Build query
-        query = Project.query
+        # Build query scoped to company
+        query = Project.query.filter_by(company_id=current_user.company_id)
         
         # Apply filters
         if status_filter:
@@ -88,9 +102,10 @@ def get_projects():
 @projects_bp.route('/<int:project_id>', methods=['GET'])
 @jwt_required()
 def get_project(project_id):
-    """Get project by ID with tasks"""
+    """Get project by ID with tasks (Scoped)"""
     try:
-        project = Project.query.get(project_id)
+        current_user = get_current_user_obj()
+        project = Project.query.filter_by(id=project_id, company_id=current_user.company_id).first()
         
         if not project:
             return error_response('Project not found', None, 404)
@@ -114,36 +129,22 @@ def get_project(project_id):
 
 
 @projects_bp.route('/', methods=['POST'])
-@role_required(UserRole.ADMIN, UserRole.TEAM_LEADER)
-def create_project(current_user):
-    """
-    Create a new project
-    Body:
-    {
-        "title": "Project Title",
-        "description": "Project description",
-        "status": "planning",
-        "priority": "high",
-        "start_date": "2024-01-01",
-        "end_date": "2024-12-31",
-        "budget": 100000.0,
-        "estimated_hours": 500,
-        "manager_id": 2
-    }
-    """
+@jwt_required()
+def create_project():
+    """Create a new project (Scoped)"""
     try:
+        current_user = get_current_user_obj()
+        # Role check
+        if current_user.role not in [UserRole.ADMIN, UserRole.TEAM_LEADER]:
+             return error_response('Permission denied', None, 403)
+
         data = request.get_json()
         
         # Validate required fields
         required_fields = ['title']
-        is_valid, missing_fields = validate_required_fields(data, required_fields)
-        
-        if not is_valid:
-            return error_response(
-                'Missing required fields',
-                {'missing_fields': missing_fields},
-                400
-            )
+        error = validate_required_fields(data, required_fields)
+        if error:
+            return error_response(error, None, 400)
         
         # Parse status
         status = ProjectStatus.PLANNING
@@ -184,7 +185,8 @@ def create_project(current_user):
         # Validate manager if provided
         manager_id = data.get('manager_id')
         if manager_id:
-            manager = User.query.get(manager_id)
+            # Check manager is in same company
+            manager = User.query.filter_by(id=manager_id, company_id=current_user.company_id).first()
             if not manager:
                 return error_response('Manager not found', None, 404)
             if manager.role not in [UserRole.ADMIN, UserRole.TEAM_LEADER]:
@@ -205,7 +207,8 @@ def create_project(current_user):
             budget=data.get('budget'),
             estimated_hours=data.get('estimated_hours'),
             created_by=current_user.id,
-            manager_id=manager_id or current_user.id
+            manager_id=manager_id or current_user.id,
+            company_id=current_user.company_id # Scoped
         )
         
         db.session.add(project)
@@ -223,11 +226,12 @@ def create_project(current_user):
 
 
 @projects_bp.route('/<int:project_id>', methods=['PUT'])
-@role_required(UserRole.ADMIN, UserRole.TEAM_LEADER)
-def update_project(project_id, current_user):
+@jwt_required()
+def update_project(project_id):
     """Update project details"""
     try:
-        project = Project.query.get(project_id)
+        current_user = get_current_user_obj()
+        project = Project.query.filter_by(id=project_id, company_id=current_user.company_id).first()
         
         if not project:
             return error_response('Project not found', None, 404)
@@ -238,7 +242,7 @@ def update_project(project_id, current_user):
         
         data = request.get_json()
         
-        # Update fields
+        # Update fields logic same as before...
         if 'title' in data:
             project.title = data['title'].strip()
         
@@ -248,8 +252,6 @@ def update_project(project_id, current_user):
         if 'status' in data:
             try:
                 project.status = ProjectStatus[data['status'].upper()]
-                
-                # Set actual_end_date when completed
                 if project.status == ProjectStatus.COMPLETED and not project.actual_end_date:
                     project.actual_end_date = datetime.utcnow().date()
             except KeyError:
@@ -280,7 +282,7 @@ def update_project(project_id, current_user):
             project.estimated_hours = data['estimated_hours']
         
         if 'manager_id' in data:
-            manager = User.query.get(data['manager_id'])
+            manager = User.query.filter_by(id=data['manager_id'], company_id=current_user.company_id).first()
             if not manager:
                 return error_response('Manager not found', None, 404)
             if manager.role not in [UserRole.ADMIN, UserRole.TEAM_LEADER]:
@@ -301,16 +303,19 @@ def update_project(project_id, current_user):
 
 
 @projects_bp.route('/<int:project_id>', methods=['DELETE'])
-@role_required(UserRole.ADMIN)
-def delete_project(project_id, current_user):
+@jwt_required()
+def delete_project(project_id):
     """Delete project (Admin only)"""
     try:
-        project = Project.query.get(project_id)
+        current_user = get_current_user_obj()
+        if current_user.role != UserRole.ADMIN:
+             return error_response('Permission denied', None, 403)
+
+        project = Project.query.filter_by(id=project_id, company_id=current_user.company_id).first()
         
         if not project:
             return error_response('Project not found', None, 404)
         
-        # Check if project has tasks
         task_count = project.tasks.count()
         if task_count > 0:
             return error_response(
@@ -330,11 +335,12 @@ def delete_project(project_id, current_user):
 
 
 @projects_bp.route('/<int:project_id>/archive', methods=['PUT'])
-@role_required(UserRole.ADMIN, UserRole.TEAM_LEADER)
-def archive_project(project_id, current_user):
+@jwt_required()
+def archive_project(project_id):
     """Archive a project"""
     try:
-        project = Project.query.get(project_id)
+        current_user = get_current_user_obj()
+        project = Project.query.filter_by(id=project_id, company_id=current_user.company_id).first()
         
         if not project:
             return error_response('Project not found', None, 404)
@@ -356,23 +362,21 @@ def archive_project(project_id, current_user):
 @projects_bp.route('/<int:project_id>/stats', methods=['GET'])
 @jwt_required()
 def get_project_stats(project_id):
-    """
-    Get project statistics and analytics
-    """
+    """Get project statistics"""
     try:
-        project = Project.query.get(project_id)
+        current_user = get_current_user_obj()
+        project = Project.query.filter_by(id=project_id, company_id=current_user.company_id).first()
         
         if not project:
             return error_response('Project not found', None, 404)
         
-        # Get task statistics
+        # ... stats calculation same as before ...
         total_tasks = project.tasks.count()
         completed_tasks = project.tasks.filter_by(status='completed').count()
         in_progress_tasks = project.tasks.filter_by(status='in_progress').count()
         todo_tasks = project.tasks.filter_by(status='todo').count()
         blocked_tasks = project.tasks.filter_by(status='blocked').count()
         
-        # Calculate total hours
         total_estimated_hours = db.session.query(
             db.func.sum(Task.estimated_hours)
         ).filter(Task.project_id == project_id).scalar() or 0
@@ -381,7 +385,6 @@ def get_project_stats(project_id):
             db.func.sum(Task.actual_hours)
         ).filter(Task.project_id == project_id).scalar() or 0
         
-        # Get team members (unique users assigned to tasks)
         from app.models import Assignment
         team_members = db.session.query(User).join(Assignment).join(Task).filter(
             Task.project_id == project_id
@@ -422,26 +425,23 @@ def get_project_stats(project_id):
 @projects_bp.route('/dashboard', methods=['GET'])
 @jwt_required()
 def get_dashboard():
-    """
-    Get dashboard overview with project statistics
-    """
+    """Get dashboard overview with project statistics (Scoped)"""
     try:
-        current_user_id = get_jwt_identity()
-        current_user = User.query.get(current_user_id)
+        current_user = get_current_user_obj()
         
-        # Get projects based on role
+        # Get projects based on role AND Company
         if current_user.role == UserRole.ADMIN:
-            projects = Project.query.all()
+            projects = Project.query.filter_by(company_id=current_user.company_id).all()
         elif current_user.role == UserRole.TEAM_LEADER:
-            projects = Project.query.filter_by(manager_id=current_user_id).all()
+            projects = Project.query.filter_by(manager_id=current_user.id, company_id=current_user.company_id).all()
         else:
-            # Get projects where user has assigned tasks
+            # For employees, only projects they have tasks in (AND same company, implicitly handled by Assignment/Task links basically, but explicit is safer)
             from app.models import Assignment
             project_ids = db.session.query(Task.project_id).join(Assignment).filter(
-                Assignment.user_id == current_user_id
+                Assignment.user_id == current_user.id
             ).distinct().all()
             project_ids = [pid[0] for pid in project_ids]
-            projects = Project.query.filter(Project.id.in_(project_ids)).all()
+            projects = Project.query.filter(Project.id.in_(project_ids), Project.company_id == current_user.company_id).all()
         
         # Calculate statistics
         total_projects = len(projects)

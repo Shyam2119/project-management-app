@@ -11,20 +11,30 @@ from app.models.activity_log import ActivityLog, ActivityType
 
 users_bp = Blueprint('users', __name__)
 
+def get_current_user_obj():
+    uid = get_jwt_identity()
+    # Convert to int since JWT identity is stored as string but user ID is integer
+    return User.query.get(int(uid)) if uid else None
 
 @users_bp.route('/', methods=['GET'])
 @jwt_required()
 def get_users():
-    """Get all users with pagination and filters"""
+    """Get all users with pagination and filters (Scoped to Company)"""
     try:
+        current_user = get_current_user_obj()
+        if not current_user:
+            return error_response('User not found', None, 404)
+        
+        # Check if user has a company
+        if not current_user.company_id:
+            return error_response('User is not associated with a company', None, 403)
+
         page = request.args.get('page', 1, type=int)
         per_page = request.args.get('per_page', 100, type=int)
         role = request.args.get('role')
         search = request.args.get('search', '').strip()
-        
-        print(f"DEBUG: get_users called. Page={page}, Role={role}")
 
-        query = User.query.filter_by(is_bot=False)
+        query = User.query.filter_by(is_bot=False, company_id=current_user.company_id)
         
         if role:
             query = query.filter_by(role=UserRole(role))
@@ -38,21 +48,15 @@ def get_users():
                     User.email.ilike(search_pattern)
                 )
             )
-        
-        # Check raw count before pagination
-        total_raw = query.count()
-        print(f"DEBUG: User query total raw count: {total_raw}")
 
         query = query.order_by(User.created_at.desc())
         pagination = query.paginate(page=page, per_page=per_page, error_out=False)
         
         users = [user.to_dict() for user in pagination.items]
-        print(f"DEBUG: Returning {len(users)} users")
         
         return pagination_response(users, page, per_page, pagination.total)
     
     except Exception as e:
-        print(f"DEBUG: Error in get_users: {str(e)}")
         return error_response(f'Failed to get users: {str(e)}', None, 500)
 
 
@@ -61,17 +65,16 @@ def get_users():
 def create_user():
     """Create new user (Admin creates managers/employees, Manager creates employees)"""
     try:
-        current_user_id = get_jwt_identity()
-        current_user = User.query.get(current_user_id)
+        current_user = get_current_user_obj()
         
         if not current_user:
             return error_response('Current user not found', None, 404)
         
-        data = request.get_json()
+        # Check if user has a company
+        if not current_user.company_id:
+            return error_response('User is not associated with a company', None, 403)
         
-        # Debug logging
-        print(f"Create user request from: {current_user.email} ({current_user.role})")
-        print(f"Request data: {data}")
+        data = request.get_json()
         
         # Validate required fields
         required = ['email', 'first_name', 'last_name', 'role']
@@ -86,11 +89,14 @@ def create_user():
         if current_user.role == UserRole.TEAM_LEADER and role != 'employee':
             return error_response('Team leaders can only create employee accounts', None, 403)
         
+        if current_user.role == UserRole.EMPLOYEE:
+             return error_response('Employees cannot create accounts', None, 403)
+
         # Validate email
         if not validate_email(email):
             return error_response('Invalid email format', None, 400)
         
-        # Check if user exists
+        # Check if user exists (Global check? Or Company check? Usually Emails are unique globally)
         existing_user = User.query.filter_by(email=email).first()
         if existing_user:
             return error_response('Email already registered', None, 400)
@@ -107,7 +113,8 @@ def create_user():
             skills=data.get('skills'),
             weekly_capacity=data.get('weekly_capacity', 40),
             is_active=True,
-            is_verified=False  # User must set password on first login
+            is_verified=False,  # User must set password on first login
+            company_id=current_user.company_id # Assign to same company
         )
         user.set_password(temp_password)
         
@@ -123,8 +130,6 @@ def create_user():
         
         db.session.commit()
         
-        print(f"✅ User created: {user.email}")
-        
         return success_response(
             'User created successfully',
             {
@@ -136,16 +141,17 @@ def create_user():
     
     except Exception as e:
         db.session.rollback()
-        print(f"❌ Error creating user: {str(e)}")
         return error_response(f'Failed to create user: {str(e)}', None, 500)
 
 
 @users_bp.route('/<int:user_id>', methods=['GET'])
 @jwt_required()
 def get_user(user_id):
-    """Get user by ID"""
+    """Get user by ID (Scoped)"""
     try:
-        user = User.query.get(user_id)
+        current_user = get_current_user_obj()
+        # Find user ensuring they are in the same company
+        user = User.query.filter_by(id=user_id, company_id=current_user.company_id).first()
         if not user:
             return error_response('User not found', None, 404)
         
@@ -160,27 +166,22 @@ def get_user(user_id):
 def update_user(user_id):
     """Update user (Admin or Self)"""
     try:
-        current_user_id = get_jwt_identity()
-        current_user_role = get_jwt()['role'] # Assuming role is in JWT, otherwise query user
+        current_user = get_current_user_obj()
         
-        # Check permissions: Admin can update anyone, User can update self
-        if str(current_user_id) != str(user_id):
-             # If not self, must be admin
-             # We need to verify admin role. 
-             # Since we don't have the user object readily available from get_jwt_identity() only returning ID usually
-             # We query the current user or trust a claim. Safest is to query.
-             curr_user = User.query.get(current_user_id)
-             if curr_user.role != UserRole.ADMIN:
-                 return error_response('Permission denied', None, 403)
-
-        user = User.query.get(user_id)
+        # Check if user exists in company
+        user = User.query.filter_by(id=user_id, company_id=current_user.company_id).first()
         if not user:
             return error_response('User not found', None, 404)
-        
+            
+        # Check permissions: Admin can update anyone in company, User can update self
+        if current_user.id != user.id:
+             if current_user.role != UserRole.ADMIN:
+                 return error_response('Permission denied', None, 403)
+
         data = request.get_json()
         
         # Prevent non-admins from changing sensitive fields like role or is_active
-        is_admin = (User.query.get(current_user_id).role == UserRole.ADMIN)
+        is_admin = (current_user.role == UserRole.ADMIN)
 
         if 'first_name' in data:
             user.first_name = data['first_name']
@@ -212,7 +213,7 @@ def update_user(user_id):
         
         # Log activity
         ActivityLog.log_activity(
-            user_id=get_jwt_identity(),
+            user_id=current_user.id,
             activity_type=ActivityType.USER_UPDATED,
             description=f"Updated user {user.email}",
             request=request
@@ -229,22 +230,24 @@ def update_user(user_id):
 
 @users_bp.route('/<int:user_id>', methods=['DELETE'])
 @jwt_required()
-@role_required('admin')
 def delete_user(user_id):
     """Delete user (admin only)"""
     try:
-        current_user_id = get_jwt_identity()
+        current_user = get_current_user_obj()
         
-        if user_id == current_user_id:
+        if current_user.role != UserRole.ADMIN:
+            return error_response('Permission denied', None, 403)
+        
+        if user_id == current_user.id:
             return error_response('Cannot delete your own account', None, 400)
         
-        user = User.query.get(user_id)
+        user = User.query.filter_by(id=user_id, company_id=current_user.company_id).first()
         if not user:
             return error_response('User not found', None, 404)
         
         # Log activity
         ActivityLog.log_activity(
-            user_id=current_user_id,
+            user_id=current_user.id,
             activity_type=ActivityType.USER_DELETED,
             description=f"Deleted user {user.email}",
             request=request
@@ -265,7 +268,8 @@ def delete_user(user_id):
 def get_user_workload(user_id):
     """Get user's current workload"""
     try:
-        user = User.query.get(user_id)
+        current_user = get_current_user_obj()
+        user = User.query.filter_by(id=user_id, company_id=current_user.company_id).first()
         if not user:
             return error_response('User not found', None, 404)
         
@@ -288,14 +292,14 @@ def get_user_workload(user_id):
 
 @users_bp.route('/requests', methods=['GET'])
 @jwt_required()
-@role_required('admin')
 def get_user_requests():
-    """Get all pending user requests (is_active=False)"""
+    """Get all pending user requests (is_active=False) - Scoped to Company"""
     try:
-        # Filter for is_active=False. 
-        # Note: Might need to distinguish between manually deactivated and pending requests.
-        # But for now, we assume is_active=False implies pending or deactivated, and Admin can see all.
-        users = User.query.filter_by(is_active=False).order_by(User.created_at.desc()).all()
+        current_user = get_current_user_obj()
+        if current_user.role != UserRole.ADMIN:
+             return error_response('Permission denied', None, 403)
+
+        users = User.query.filter_by(is_active=False, company_id=current_user.company_id).order_by(User.created_at.desc()).all()
         return success_response('Pending requests retrieved', [user.to_dict() for user in users])
     except Exception as e:
         return error_response(f'Failed to get requests: {str(e)}', None, 500)
@@ -303,11 +307,14 @@ def get_user_requests():
 
 @users_bp.route('/requests/<int:user_id>/approve', methods=['POST'])
 @jwt_required()
-@role_required('admin')
 def approve_request(user_id):
-    """Approve user request (Set is_active=True, is_verified=True)"""
+    """Approve user request"""
     try:
-        user = User.query.get(user_id)
+        current_user = get_current_user_obj()
+        if current_user.role != UserRole.ADMIN:
+             return error_response('Permission denied', None, 403)
+
+        user = User.query.filter_by(id=user_id, company_id=current_user.company_id).first()
         if not user:
             return error_response('User not found', None, 404)
         
@@ -315,7 +322,7 @@ def approve_request(user_id):
         user.is_verified = True
         
         ActivityLog.log_activity(
-            user_id=get_jwt_identity(),
+            user_id=current_user.id,
             activity_type=ActivityType.USER_UPDATED,
             description=f"Approved user request for {user.email}",
             request=request
@@ -330,16 +337,19 @@ def approve_request(user_id):
 
 @users_bp.route('/requests/<int:user_id>/reject', methods=['POST'])
 @jwt_required()
-@role_required('admin')
 def reject_request(user_id):
-    """Reject user request (Delete user)"""
+    """Reject user request"""
     try:
-        user = User.query.get(user_id)
+        current_user = get_current_user_obj()
+        if current_user.role != UserRole.ADMIN:
+             return error_response('Permission denied', None, 403)
+             
+        user = User.query.filter_by(id=user_id, company_id=current_user.company_id).first()
         if not user:
             return error_response('User not found', None, 404)
             
         ActivityLog.log_activity(
-            user_id=get_jwt_identity(),
+            user_id=current_user.id,
             activity_type=ActivityType.USER_DELETED,
             description=f"Rejected user request for {user.email}",
             request=request

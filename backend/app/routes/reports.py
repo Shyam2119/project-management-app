@@ -24,7 +24,21 @@ def export_projects():
     """
     try:
         current_user_id = get_jwt_identity()
-        current_user = User.query.get(current_user_id)
+        if not current_user_id:
+            return error_response('Invalid token', None, 401)
+        
+        # Convert to int since JWT identity is stored as string but user ID is integer
+        try:
+            current_user = User.query.get(int(current_user_id))
+        except (ValueError, TypeError):
+            return error_response('Invalid user ID', None, 400)
+        
+        if not current_user:
+            return error_response('User not found', None, 404)
+        
+        # Check if user has a company (for scoped queries)
+        if not current_user.company_id:
+            return error_response('User is not associated with a company', None, 403)
         
         # Get query parameters
         status_filter = request.args.get('status')
@@ -35,7 +49,7 @@ def export_projects():
         
         # Role-based filtering
         if current_user.role == UserRole.TEAM_LEADER:
-            query = query.filter_by(manager_id=current_user_id)
+            query = query.filter_by(manager_id=int(current_user_id))
         
         # Apply filters
         if status_filter:

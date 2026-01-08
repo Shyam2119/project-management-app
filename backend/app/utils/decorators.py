@@ -10,7 +10,8 @@ def role_required(*roles):
         @wraps(fn)
         def wrapper(*args, **kwargs):
             current_user_id = get_jwt_identity()
-            user = User.query.get(current_user_id)
+            # Convert to int since JWT identity is stored as string but user ID is integer
+            user = User.query.get(int(current_user_id)) if current_user_id else None
             
             if not user:
                 return jsonify({
